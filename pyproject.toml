@@ -1,0 +1,9 @@
+[project]
+name = "wheatstone-bridge-service"
+version = "1.0.0"
+description = "惠斯通电桥核算服务：不平衡输出（含检流计戴维南等效）与平衡反解"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]
