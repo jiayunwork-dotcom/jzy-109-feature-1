@@ -1,7 +1,7 @@
 [project]
-name = "wheatstone-bridge-service"
-version = "1.0.0"
-description = "惠斯通电桥核算服务：不平衡输出（含检流计戴维南等效）与平衡反解"
+name = "resistor-bridge-service"
+version = "2.0.0"
+description = "电阻电桥核算服务：四臂惠斯通电桥与开尔文双电桥（毫欧级四端低值电阻）的正算与平衡反解"
 requires-python = ">=3.12"
 
 [tool.pytest.ini_options]

@@ -10,7 +10,9 @@ import math
 from collections.abc import Mapping
 from typing import Any
 
+from app.bridge.kelvin_topology import CONTACT_FIELDS, KelvinBridge
 from app.bridge.topology import ARM_NAMES, ArmSet
+from app.presets import BRIDGE_TYPES, KELVIN, WHEATSTONE
 
 
 class BridgeInputError(ValueError):
@@ -128,3 +130,108 @@ def validate_solve_target(target: Any) -> None:
             "solve_target_inconsistent",
             f"目标不自洽：本接口按平衡条件反推，目标输出必须为 0，收到 {target!r}",
         )
+
+
+# --------------------------------------------------------------------------
+# 开尔文双电桥校验
+# --------------------------------------------------------------------------
+
+#: 反解不需要 rx；正算时 rx 必须为正
+_KELVIN_ARM_FIELDS: tuple[str, ...] = ("r1", "r2", "r3", "r4")
+_KELVIN_POSITIVE_FIELDS: dict[str, str] = {
+    "rs": "标准电阻 rs",
+    "r1": "外比例臂 r1",
+    "r2": "外比例臂 r2",
+    "r3": "内比例臂 r3",
+    "r4": "内比例臂 r4",
+}
+
+
+def _require_nonneg_finite(label: str, value: Any, field: str) -> float:
+    """轭线/接触电阻：允许为零，但不得为负或非有限。"""
+    if not _is_finite_number(value):
+        raise BridgeInputError(
+            f"{field}_not_finite", f"{label} 必须是有限数值，收到 {value!r}"
+        )
+    if value < 0:
+        raise BridgeInputError(
+            f"{field}_negative", f"{label} 必须非负，收到 {value}"
+        )
+    return float(value)
+
+
+def validate_preset_type(value: Any) -> str:
+    """电桥档类型：缺省（老式登记）按四臂惠斯通电桥处理。"""
+    if value is None:
+        return WHEATSTONE
+    if value not in BRIDGE_TYPES:
+        raise BridgeInputError(
+            "bridge_type_invalid",
+            f"电桥类型必须是 {WHEATSTONE!r} 或 {KELVIN!r}，收到 {value!r}",
+        )
+    return value
+
+
+def require_kelvin_bridge(raw: Any, *, need_rx: bool) -> KelvinBridge:
+    """校验并构造双电桥参数。need_rx 控制是否要求待测电阻 rx（正算要，反解不要）。
+
+    错误码彼此独立、在求解节点方程之前挡住：
+    ``kelvin_arm_not_positive``（比例臂/标准电阻/待测电阻非正或非有限）、
+    ``kelvin_yoke_negative``（轭线为负或非有限）、
+    ``kelvin_contact_negative``（任一接触电阻为负或非有限）、
+    ``kelvin_field_unknown``（多出不认识的字段）。
+    """
+    if not isinstance(raw, Mapping):
+        raise BridgeInputError(
+            "kelvin_params_invalid",
+            "双电桥参数必须是包含 r1、r2、r3、r4、rs（及可选 yoke、接触电阻）的对象",
+        )
+
+    required = set(_KELVIN_POSITIVE_FIELDS)
+    known = required | {"rx", "yoke"} | set(CONTACT_FIELDS)
+    extra = sorted(set(raw) - known)
+    if extra:
+        raise BridgeInputError(
+            "kelvin_field_unknown",
+            f"双电桥参数出现未知字段：{', '.join(extra)}",
+        )
+
+    missing = sorted(required - set(raw))
+    if missing:
+        raise BridgeInputError(
+            "kelvin_field_missing", f"双电桥参数缺少必填字段：{', '.join(missing)}"
+        )
+
+    values: dict[str, float] = {}
+    for field, label in _KELVIN_POSITIVE_FIELDS.items():
+        values[field] = _require_positive_finite(label, raw[field], "kelvin_arm")
+    # rx：正算必填为正有限；反解/登记可给可省，给了也必须正有限
+    if raw.get("rx") is not None:
+        values["rx"] = _require_positive_finite("待测电阻 rx", raw["rx"], "kelvin_arm")
+    else:
+        if need_rx:
+            raise BridgeInputError(
+                "kelvin_field_missing", "双电桥正算必须给出待测电阻 rx"
+            )
+        values["rx"] = 0.0
+
+    values["yoke"] = _require_nonneg_finite("轭线电阻 yoke", raw.get("yoke", 0.0), "kelvin_yoke")
+    for field in CONTACT_FIELDS:
+        label = {
+            "rc1": "C1 电流端接触电阻 rc1", "rc2": "C2 电流端接触电阻 rc2",
+            "rc3": "C3 电流端接触电阻 rc3", "rc4": "C4 电流端接触电阻 rc4",
+            "rp1": "P1 电位端接触电阻 rp1", "rp2": "P2 电位端接触电阻 rp2",
+            "rp3": "P3 电位端接触电阻 rp3", "rp4": "P4 电位端接触电阻 rp4",
+        }[field]
+        values[field] = _require_nonneg_finite(label, raw.get(field, 0.0), "kelvin_contact")
+
+    return KelvinBridge(**values)
+
+
+def validate_source_current(value: Any) -> float:
+    """恒流源电流只要求是有限数。零是正常情形（输出为零），负号表示反向。"""
+    if not _is_finite_number(value):
+        raise BridgeInputError(
+            "source_current_not_finite", f"恒流源电流必须是有限数值，收到 {value!r}"
+        )
+    return float(value)
